@@ -1,39 +1,55 @@
 # Cyber Relic Scanner — 赛博遗物：数据提取终端
 
-> A real-time 3D text-layout engine where the silhouette of a damaged flight helmet physically displaces terminal text, styled as a deep-space derelict data recovery terminal.
+> 一个实时 3D 文字排版引擎。受损飞行头盔的剪影会物理性地"推开"终端文字，整体风格设定为深空废弃飞船的数据提取终端。
 
-**Live:** `https://liu233jh.github.io/cyber-relic-scanner/`
-
----
-
-## Table of Contents
-
-1. [Project Genesis: From Zero to Cyber Relic](#project-genesis)
-2. [What This Actually Is](#what-this-actually-is)
-3. [Conceptual Architecture](#conceptual-architecture)
-4. [The Rendering Pipeline (Frame-by-Frame)](#the-rendering-pipeline)
-5. [Project Structure](#project-structure)
-6. [Technology Stack](#technology-stack)
-7. [Getting Started](#getting-started)
-8. [Development Journey (Changelog)](#development-journey)
-9. [Deployment](#deployment)
-10. [Configuration Reference](#configuration-reference)
-11. [How To Swap The Model](#how-to-swap-the-model)
-12. [License & Credits](#license--credits)
+**线上地址：** <https://liu233jh.github.io/cyber-relic-scanner/>
 
 ---
 
-## Project Genesis
+## 目录
 
-### Step 0 — Understanding the Foundations
+- [这是什么](#这是什么)
+- [从零开始的构建历程](#从零开始的构建历程)
+- [核心架构](#核心架构)
+- [渲染管线（逐帧详解）](#渲染管线逐帧详解)
+- [项目文件结构](#项目文件结构)
+- [技术栈](#技术栈)
+- [本地运行](#本地运行)
+- [部署到 GitHub Pages](#部署到-github-pages)
+- [如何替换 3D 模型](#如何替换-3d-模型)
+- [配置参数速查](#配置参数速查)
+- [许可证与致谢](#许可证与致谢)
 
-This project began by studying two open-source repositories:
+---
 
-**`chenglou/pretext`** — A high-performance text layout engine (~0.0002ms per layout operation). Unlike CSS text layout, Pretext works at the grapheme level with canvas-based measurement, supporting breakable-fit-advance. Key exports: `prepareWithSegments()`, `layoutNextLine()`.
+## 这是什么
 
-**`feitangyuan/pretext-3d`** — A proof-of-concept integrating Three.js 3D rendering with Pretext text layout. The core insight: render a 3D model to an offscreen mask, scan the mask for occupied pixels, carve legal text slots from the remaining horizontal space, and feed those slots to Pretext for line-by-line reflow. The text literally flows around the 3D object's silhouette in real time.
+这**不是**一个普通的 3D 装饰背景上叠了几行字。
 
-### Step 1 — Clone, Analyze, Install
+3D 模型的可见剪影是一个**实时的空间约束**，它决定了文字能出现在屏幕的哪些位置。每一帧：
+
+1. 将 3D 模型渲染到离屏遮罩（白色几何体 + 黑色背景）
+2. 从 GPU 读回像素数据
+3. 逐行扫描每个文字带的占用列
+4. 将遮挡区间合并，从可用行宽中扣除
+5. Pretext 排版引擎将文字重排到剩余的合法槽位中
+6. DOM 文字节点实时更新位置
+
+结果：文字**绕开 3D 物体流动**，随模型旋转和鼠标移动动态变化。
+
+---
+
+## 从零开始的构建历程
+
+### 第 0 步：理解地基
+
+这个项目始于对两个开源仓库的深入分析：
+
+- **`chenglou/pretext`** — 一个高性能文字排版引擎（每次排版约 0.0002ms）。不同于 CSS 排版，Pretext 在字形（grapheme）级别工作，基于 Canvas 测量，支持可断行的自适应推进。核心 API：`prepareWithSegments()`、`layoutNextLine()`。
+
+- **`feitangyuan/pretext-3d`** — 一个概念验证项目，将 Three.js 3D 渲染与 Pretext 文字排版集成。核心思路：把 3D 模型渲染到离屏遮罩 → 扫描遮罩中的占用像素 → 从剩余水平空间中切出合法的文字槽位 → 将槽位喂给 Pretext 逐行重排。文字真正地"绕开"3D 物体的剪影流动。
+
+### 第 1 步：克隆、分析、跑起来
 
 ```bash
 git clone https://github.com/chenglou/pretext.git
@@ -41,364 +57,352 @@ git clone https://github.com/feitangyuan/pretext-3d.git
 cd pretext-3d && pnpm install
 ```
 
-### Step 2 — The "Text Black Hole" Interaction
+期间解决了代理冲突、端口占用、pnpm 内部兼容性等一系列环境问题，最终用 `npx vite` 成功启动了开发服务器。
 
-The first innovation: extending the mask pipeline so text does not just avoid the 3D model — it also avoids the **mouse cursor**. A circular "black hole" region centered on the cursor repels text, creating the illusion that the user's pointer exerts gravitational pull on the typography.
+### 第 2 步：文字黑洞 · 坍塌交互
 
-This introduced `getMouseBlackHoleInterval()` in `mask-layout.mjs`, which computes the intersection of a circle at the mouse position with each text band, returning a blocked interval that gets merged with the model silhouette mask.
+第一个创新：扩展遮罩管线，让文字不仅避开 3D 模型，也避开**鼠标光标**。一个以光标为中心的圆形"黑洞"区域排斥文字，制造指针对排版施加引力般的错觉。
 
-### Step 3 — Matrix Hacker Visual Overhaul
+在 `mask-layout.mjs` 中新增了 `getMouseBlackHoleInterval()` 函数，计算鼠标圆圈与每个文字带的交集，返回的遮挡区间与模型剪影遮罩合并处理。
 
-Theme pivot: dark terminal aesthetic with green-on-black text, CRT scanlines, wireframe 3D geometry, and glitch effects. A 13-part procedural voxel bust was created as a fallback model (hoodie + mask figure built from `BoxGeometry` + `EdgesGeometry` wireframe overlays).
+### 第 3 步：Matrix Hacker 视觉大改版
 
-### Step 4 — Mysterious Hacker Interaction Space
+主题切换：黑底绿字的终端美学，CRT 扫描线，3D 线框几何体，故障（glitch）特效。
 
-Introduced model-centric rotation (users drag to rotate the model itself, not orbit the camera), Three.js `SpotLight` for dramatic under-lighting, velocity-driven per-character glitch effects, and CSS `@keyframes flicker` with staggered delays for CRT authenticity.
+创建了一个 13 部件的程序化体素半身像作为后备模型——用 `BoxGeometry` + `EdgesGeometry` 线框叠加层拼出兜帽面具人像。
 
-### Step 5 — Real GLB Model Swap
+### 第 4 步：神秘黑客交互空间
 
-Replaced the procedural voxel bust with **KhronosGroup DamagedHelmet** — a 3.6MB sci-fi flight helmet with battle-scarred PBR materials (CC BY 4.0 license). The model is loaded via Three.js `GLTFLoader` with automatic Box3 normalization and centering. A procedural fallback remains in the code for offline resilience.
+- **模型自转交互**：用户拖拽旋转模型本身（而非相机环绕），Y 轴 360° 水平旋转，X 轴 ±28° 垂直倾斜，松手后自动慢转
+- **聚光灯照明**：从下方打绿色 `SpotLight`，低环境光营造神秘感
+- **速度驱动的故障效果**：`letter-spacing` 抖动、`translate` 偏移、`opacity` 淡出、动态 `text-shadow`，强度由鼠标距离 + 移动速度共同决定
+- **CRT 闪烁动画**：CSS `@keyframes flicker` 配合 nth-child 错峰延迟
+- **扫描线叠加**：`::after` 伪元素 + 重复线性渐变
 
-### Step 6 — Cyber Relic: Data Extraction Terminal
+### 第 5 步：真实 GLB 模型替换
 
-The final thematic overhaul: deep navy-black background (`#05050A`), holographic cyan text (`#00F0FF`) with bloom-style `text-shadow`, cinematic three-point lighting (white key light raking across the helmet to expose scratch detail + cyan rim light for a cyber silhouette + subtle fill), cyan `EdgesGeometry` wireframe overlay on the GLB model (opacity 0.25), and corrupted flight-log tokens (`DATA_CORRUPTED`, `SECTOR_7G_OFFLINE`, `0xBADF00D`, `LIFE_SUPPORT_CRITICAL`, etc.).
+用 **KhronosGroup DamagedHelmet**（科幻破损飞行头盔，CC BY 4.0 许可，3.6MB）替换了程序化体素模型。
 
-### Step 7 — GitHub Pages Deployment
+- 通过 jsDelivr CDN 下载（GitHub Raw 在国内太慢，只有 3KB/s）
+- `GLTFLoader` 异步加载，自动 Box3 包围盒归一化居中
+- 新增 `addCyberWireframe()` 函数：在所有网格上叠加青色 `EdgesGeometry` 线框（阈值角 22°，透明度 0.25）
+- 模型缩小：缩放目标从 7.8 单位降至 5.0 单位
+- 后备体素模型保留，加载失败时自动切换
+- 修复了相机居中 bug：`computeFitState` 计算的 `target` 和 `baseDistance` 之前从未被应用到相机
 
-Configured `vite.config.js` with `base: '/cyber-relic-scanner/'`, moved static assets into Vite's `public/` directory, installed `gh-pages`, and deployed to `https://liu233jh.github.io/cyber-relic-scanner/`.
+### 第 6 步：赛博遗物 · 数据提取终端（当前版本）
+
+**视觉大换血：**
+
+| 元素 | 旧（Matrix） | 新（Cyber Relic） |
+|------|-------------|------------------|
+| 背景色 | `#010301` 深绿黑 | `#05050A` 深海蓝黑 |
+| 文字色 | `#00FF41` 终端绿 | `#00F0FF` 全息青 |
+| 发光阴影 | 绿色 glow | 青色 bloom |
+| 模型灯光 | 单点绿光 | 三点布光（白+青+补光） |
+
+**文字内容彻底重写：** 受损飞行记录日志令牌——`DATA_CORRUPTED`、`SECTOR_7G_OFFLINE`、`0xBADF00D`、`MEMORY_FRAGMENT_LOST`、`EJECT_SYSTEM_FAILED`、`RECOVERING_LOGS...`、`LIFE_SUPPORT_CRITICAL`、`HULL_BREACH_DETECTED` 等 30 个独特令牌，生成 90 段随机组合文本。
+
+**三点布光系统：**
+
+| 灯光 | 类型 | 颜色 | 强度 | 位置 | 作用 |
+|------|------|------|------|------|------|
+| 环境光 | `AmbientLight` | `#0a1a2a` | 0.45 | — | 防止死黑 |
+| 主光 | `SpotLight` | `#ffffff` | 120 | (5, 1.5, 6) | 从右侧扫过头盔，暴露划痕细节 |
+| 轮廓光 | `SpotLight` | `#00F0FF` | 80 | (-4, 2.5, -3) | 左后方青色勾边，赛博轮廓 |
+| 补光 | `PointLight` | `#003344` | 3 | (0, -2, 4) | 底部冷色补充 |
+
+### 第 7 步：GitHub Pages 部署
+
+- 配置 `vite.config.js`：`base: '/cyber-relic-scanner/'`
+- 静态资源移至 `public/assets/`（Vite 打包时自动复制到 `dist/` 根目录）
+- 安装 `gh-pages`，添加 `predeploy` 和 `deploy` 脚本
+- 推送到 `Liu233jh/cyber-relic-scanner` 的 `gh-pages` 分支
+- 线上地址：<https://liu233jh.github.io/cyber-relic-scanner/>
 
 ---
 
-## What This Actually Is
-
-This is **not** a decorative 3D background with text overlaid on top. The 3D model's visible silhouette is a **live spatial constraint** that shapes where text can legally appear. Every frame:
-
-1. The model is rendered to an offscreen mask (white geometry on black background)
-2. Pixel data is read back from the GPU
-3. Each horizontal text band is scanned for occupied columns
-4. Blocked intervals are merged and subtracted from the available line width
-5. Pretext recomposes text into the surviving slots
-6. DOM text nodes are repositioned in real time
-
-The result: text that **flows around the 3D object**, dynamically updating as the model rotates or the mouse moves.
-
----
-
-## Conceptual Architecture
+## 核心架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    USER INPUT                        │
-│  Drag to rotate model   Move mouse to repel text    │
-└──────────────┬──────────────────┬───────────────────┘
-               │                  │
-               ▼                  ▼
+┌─────────────────────────────────────────────────────────┐
+│                     用户输入                              │
+│    拖拽旋转模型         移动鼠标推开文字                    │
+└──────────────┬────────────────────┬──────────────────────┘
+               │                    │
+               ▼                    ▼
 ┌──────────────────────┐  ┌──────────────────────────┐
-│   VISIBLE SCENE       │  │   MASK SCENE              │
-│   Three.js WebGL      │  │   Offscreen WebGL         │
-│   - DamagedHelmet.glb │  │   - Same geometry         │
-│   - 3-point lighting  │  │   - White override mat    │
-│   - cyan wireframe    │  │   - Black background      │
-│   → screen output     │  │   → pixel buffer          │
+│   可见场景            │  │   遮罩场景                 │
+│   Three.js WebGL     │  │   离屏 WebGL              │
+│   · DamagedHelmet    │  │   · 相同几何体             │
+│   · 三点布光          │  │   · 白色覆盖材质           │
+│   · 青色线框叠加      │  │   · 黑色背景               │
+│   → 屏幕输出          │  │   → 像素缓冲区             │
 └──────────────────────┘  └──────────┬───────────────┘
                                      │
                                      ▼
                           ┌──────────────────────────┐
-                          │   MASK ANALYSIS            │
-                          │   mask-layout.mjs          │
-                          │   - getMaskIntervalForBand │
-                          │   - mergeIntervals         │
-                          │   - carveTextLineSlots     │
-                          │   - chooseSlot             │
-                          │   - mouse black hole       │
+                          │   遮罩分析                 │
+                          │   mask-layout.mjs         │
+                          │   · getMaskIntervalForBand│
+                          │   · mergeIntervals        │
+                          │   · carveTextLineSlots    │
+                          │   · chooseSlot            │
+                          │   · 鼠标黑洞               │
                           └──────────┬───────────────┘
                                      │
                                      ▼
                           ┌──────────────────────────┐
-                          │   TEXT LAYOUT              │
-                          │   @chenglou/pretext        │
-                          │   - prepareWithSegments    │
-                          │   - layoutNextLine         │
-                          │   → positioned text lines  │
+                          │   文字排版                 │
+                          │   @chenglou/pretext       │
+                          │   · prepareWithSegments   │
+                          │   · layoutNextLine        │
+                          │   → 定位后的文字行         │
                           └──────────┬───────────────┘
                                      │
                                      ▼
                           ┌──────────────────────────┐
-                          │   DOM RECONCILIATION       │
-                          │   main.mjs                 │
-                          │   - syncLinePool           │
-                          │   - update node positions  │
-                          │   - applyGlitch (CSS)      │
-                          │   → rendered text overlay  │
+                          │   DOM 协调                 │
+                          │   main.mjs                │
+                          │   · syncLinePool          │
+                          │   · 更新节点位置           │
+                          │   · applyGlitch（CSS）    │
+                          │   → 渲染后的文字叠加层     │
                           └──────────────────────────┘
 ```
 
 ---
 
-## The Rendering Pipeline
+## 渲染管线（逐帧详解）
 
-### Frame Loop (`tick()`)
+### 主循环 `tick()`
 
 ```
 tick()
   │
-  ├─ Update model rotation (idle spin or drag-driven)
-  ├─ Decay mouse velocity
-  ├─ Sync model + mask rotation
+  ├─ 更新模型旋转（空闲自转 或 拖拽驱动）
+  ├─ 衰减鼠标速度
+  ├─ 同步模型 + 遮罩旋转
   │
-  ├─ renderScene()       → visible WebGL frame to screen
-  ├─ renderMask()        → offscreen WebGL → ImageData
-  ├─ layoutCopy(mask)    → slot carving → Pretext reflow → DOM update
-  └─ applyGlitch()       → per-character CSS transforms
+  ├─ renderScene()         → 可见 WebGL 帧渲染到屏幕
+  ├─ renderMask()          → 离屏 WebGL → ImageData
+  ├─ layoutCopy(mask)      → 槽位切割 → Pretext 重排 → DOM 更新
+  └─ applyGlitch()         → 逐字符 CSS 变换
 ```
 
-### Mask Pipeline (`layoutCopy` → `layoutBlock` → `placeFlowLine`)
+### 遮罩管线（`layoutCopy` → `layoutBlock` → `placeFlowLine`）
 
-For every text line band (y, y + LINE_HEIGHT):
+对于每个文字行带（y, y + LINE_HEIGHT）：
 
-1. **`getMaskIntervalForBand()`** — scan the mask ImageData row-by-row for white pixels (threshold ≥ 26). Map mask coordinates back to viewport coordinates. Return `{ left, right }` or `null`.
+1. **`getMaskIntervalForBand()`** — 逐行扫描遮罩 ImageData 中的白色像素（阈值 ≥ 26）。将遮罩坐标映射回视口坐标，返回 `{ left, right }` 或 `null`。
 
-2. **`getMouseBlackHoleInterval()`** — compute the intersection of a circle (radius 200px centered on cursor) with this band. Return `{ left, right }` or `null`.
+2. **`getMouseBlackHoleInterval()`** — 计算以光标为中心、半径 200px 的圆与该行带的交集，返回 `{ left, right }` 或 `null`。
 
-3. **`mergeIntervals()`** — combine model mask + mouse black hole into a single list of blocked horizontal ranges, sorted and deduplicated.
+3. **`mergeIntervals()`** — 将模型遮罩 + 鼠标黑洞合并为一张去重排序后的水平遮挡区间列表。
 
-4. **`carveTextLineSlots()`** — subtract blocked intervals from the full viewport width. Keep slots ≥ `MIN_SLOT_WIDTH` (80px).
+4. **`carveTextLineSlots()`** — 从完整视口宽度中扣除所有遮挡区间。保留宽度 ≥ `MIN_SLOT_WIDTH`（80px）的槽位。
 
-5. **`chooseSlot()`** — pick the widest available slot. Tie-break by alignment preference.
+5. **`chooseSlot()`** — 选择最宽的可用槽位。宽度相同时按对齐偏好决定（左/右）。
 
-6. **`layoutNextLine()`** — call Pretext with the chosen slot width. Get back a line of grapheme-breakable text that fits.
+6. **`layoutNextLine()`** — 调用 Pretext，用选中的槽位宽度排版一行可断行文字。
 
-7. Position the line in the DOM at `(slot.left, band.y)`.
+7. 将文字行定位到 DOM 中的 `(slot.left, band.y)`。
 
-### Cache Key
+### 缓存键
 
 ```
 `${viewportWidth}:${viewportHeight}:${modelRotationY}:${modelRotationX}:${mouseX}:${mouseY}`
 ```
 
-Layout is recomputed only when this key changes — rotation granularity at 4 decimal places.
+仅在此键变化时重新排版——旋转精度保留 4 位小数。
 
 ---
 
-## Project Structure
+## 项目文件结构
 
 ```
 pretext-3d/
-├── index.html              # Entry HTML (scene-layer, copy-layer, scrub-track, status-chip)
-├── main.mjs                # Core application (~700 lines)
-│   ├── initScene()         #   Three.js setup, lighting, camera
-│   ├── loadModel()         #   GLTFLoader → normalizeModel → addCyberWireframe
-│   ├── normalizeModel()    #   Box3 centering + scale to 5.0 units
-│   ├── addCyberWireframe() #   Cyan EdgesGeometry overlay on all meshes
-│   ├── computeFitState()   #   Auto-camera distance from model bounds + FOV
-│   ├── tick()              #   Frame loop: rotation, camera, mask, layout, glitch
-│   ├── layoutCopy()        #   Full text reflow orchestration
-│   ├── layoutBlock()       #   Block-level: lead lines + body paragraphs
-│   ├── placeFlowLine()     #   Single line placement with fallback
-│   ├── applyGlitch()       #   Proximity + velocity CSS jitter
-│   ├── generateFlightLogText() #  Procedural corrupted-log text generator
-│   └── createProceduralModel() #  Voxel bust fallback (13 BoxGeometry parts)
-├── mask-layout.mjs         # Slot carving engine (~140 lines)
-│   ├── getMaskIntervalForBand()    # Pixel → viewport interval scan
-│   ├── getMouseBlackHoleInterval() # Circle-segment intersection
-│   ├── mergeIntervals()            # Sort, clip, deduplicate blocked ranges
-│   ├── carveTextLineSlots()        # Subtract blocked from free space
-│   ├── chooseSlot()                # Widest-slot selection with alignment tie-break
-│   ├── splitParagraphs()           # Text → paragraph array
-│   ├── clamp() / lerp()            # Math utilities
-│   └── getScrubPose() / shouldJustifyLine()  # Legacy utilities
-├── mask-layout.test.mjs    # 12 unit tests for mask pipeline
-├── styles.css              # Visual theme (~155 lines)
-│   ├── :root               #   CSS custom properties (holo-cyan, bg)
-│   ├── @keyframes flicker  #   CRT flicker with staggered nth-child delays
-│   ├── @keyframes scanline #   Not animated via CSS, used conceptually
-│   ├── .app::after         #   Scanline overlay (repeating-linear-gradient)
-│   ├── .copy-line          #   Positioned text with text-shadow glow + mix-blend-mode: screen
-│   ├── .scrub-track/fill   #   Progress bar chrome
-│   └── .status-chip        #   Status indicator
-├── vite.config.js          # Vite config: base path + pretext alias
-├── package.json            # Dependencies + scripts (dev, build, check, deploy)
+├── index.html              # 入口 HTML
+├── main.mjs                # 核心应用（~700 行）
+│   ├── initScene()         #   Three.js 初始化：渲染器、场景、灯光、相机
+│   ├── loadModel()         #   GLTFLoader 加载 → normalizeModel → addCyberWireframe
+│   ├── normalizeModel()    #   Box3 包围盒归一化居中，缩放到 5.0 单位
+│   ├── addCyberWireframe() #   在所有网格上叠加青色 EdgesGeometry 线框
+│   ├── computeFitState()   #   根据模型包围盒 + FOV 自动计算相机距离
+│   ├── tick()              #   帧循环：旋转、相机、遮罩、排版、故障效果
+│   ├── layoutCopy()        #   完整文字重排编排
+│   ├── layoutBlock()       #   块级排版：标题行 + 正文段落
+│   ├── placeFlowLine()     #   单行放置（含回退搜索）
+│   ├── applyGlitch()       #   基于距离+速度的 CSS 逐字符抖动
+│   ├── generateFlightLogText()  # 飞行日志文本生成器（30 个令牌，90 段）
+│   └── createProceduralModel()  # 体素后备模型（13 个 BoxGeometry 部件）
+├── mask-layout.mjs         # 槽位切割引擎（~140 行）
+│   ├── getMaskIntervalForBand()    # 像素 → 视口区间扫描
+│   ├── getMouseBlackHoleInterval() # 圆-线段交集计算
+│   ├── mergeIntervals()            # 排序、裁剪、去重遮挡区间
+│   ├── carveTextLineSlots()        # 从自由空间中扣除遮挡
+│   ├── chooseSlot()                # 最宽槽位选择 + 对齐偏好
+│   ├── splitParagraphs()           # 文本 → 段落数组
+│   └── clamp() / lerp()            # 数学工具
+├── mask-layout.test.mjs    # 12 个遮罩管线单元测试
+├── styles.css              # 视觉主题（~155 行）
+│   ├── :root               #   CSS 自定义属性（全息青、背景色）
+│   ├── @keyframes flicker  #   CRT 闪烁动画，nth-child 错峰
+│   ├── .app::after         #   扫描线叠加层
+│   ├── .copy-line          #   定位文字 + text-shadow 发光 + mix-blend-mode: screen
+│   ├── .scrub-track/fill   #   进度条装饰
+│   └── .status-chip        #   状态指示器
+├── vite.config.js          # Vite 配置：base 路径 + pretext 别名
+├── package.json            # 依赖 + 脚本（dev, build, check, deploy）
 ├── public/
 │   └── assets/
-│       └── model.glb       # DamagedHelmet GLB (3.6MB, gitignored)
-└── dist/                   # Production build output (gitignored)
-    ├── index.html
-    └── assets/
-        ├── index-*.js      # Bundled Three.js + Pretext + app code (~585KB)
-        ├── index-*.css     # Bundled styles
-        └── model.glb       # Copied from public/
+│       └── model.glb       # DamagedHelmet GLB 模型（3.6MB，gitignore 排除）
+└── dist/                   # 生产构建输出（gitignore 排除）
 ```
 
 ---
 
-## Technology Stack
+## 技术栈
 
-| Layer | Technology | Role |
-|-------|-----------|------|
-| 3D Rendering | **Three.js 0.166.1** | WebGL scene, GLB model loading, lighting, mask offscreen rendering |
-| Text Layout | **@chenglou/pretext 0.0.3** | Grapheme-level text measurement and line breaking with arbitrary slot widths |
-| Build Tool | **Vite 5.4** | Dev server with HMR, production bundling, static asset handling |
-| Deployment | **gh-pages 6.3** | Automated `dist/` → `gh-pages` branch push |
-| Testing | **Node.js built-in test runner** | 12 unit tests for mask pipeline logic |
-| Fonts | System monospace stack | Courier New, JetBrains Mono, Fira Code, Cascadia Code, Consolas |
+| 层级 | 技术 | 用途 |
+|------|------|------|
+| 3D 渲染 | **Three.js 0.166.1** | WebGL 场景、GLB 加载、三点布光、离屏遮罩渲染 |
+| 文字排版 | **@chenglou/pretext 0.0.3** | 字形级文字测量与任意宽度槽位的断行 |
+| 构建工具 | **Vite 5.4** | 开发服务器（HMR）、生产打包、静态资源处理 |
+| 部署 | **gh-pages 6.3** | 自动将 `dist/` 推送到 `gh-pages` 分支 |
+| 测试 | **Node.js 内置 test runner** | 12 个遮罩管线逻辑单元测试 |
+| 字体 | 系统等宽字体栈 | Courier New, JetBrains Mono, Fira Code, Cascadia Code, Consolas |
 
 ---
 
-## Getting Started
+## 本地运行
 
-### Prerequisites
+### 环境要求
 
 - Node.js ≥ 18
-- pnpm (recommended) or npm
+- pnpm（推荐）或 npm
 
-### Install
+### 安装
 
 ```bash
 cd pretext-3d
 pnpm install
 ```
 
-### Development
+### 开发
 
 ```bash
 pnpm dev
-# → http://127.0.0.1:4173/cyber-relic-scanner/
+# 浏览器访问：http://127.0.0.1:4173/cyber-relic-scanner/
 ```
 
-Note: the dev server redirects to `/cyber-relic-scanner/` because `base` is configured in `vite.config.js` for GitHub Pages compatibility.
+> 注意：开发服务器会自动重定向到 `/cyber-relic-scanner/`，因为 `vite.config.js` 中配置了 `base: '/cyber-relic-scanner/'`（GitHub Pages 兼容）。
 
-### Check
+### 语法检查 + 单元测试
 
 ```bash
 pnpm check
-# Runs: node --check on main.mjs + mask-layout.mjs
-#       node --test mask-layout.test.mjs (12 unit tests)
+# 依次执行：
+#   node --check main.mjs        → 语法检查
+#   node --check mask-layout.mjs → 语法检查
+#   node --test mask-layout.test.mjs → 12 个单元测试
 ```
 
-### Build
+### 生产构建
 
 ```bash
 pnpm build
-# Output: dist/
+# 输出到 dist/
 ```
 
-### Deploy to GitHub Pages
+---
+
+## 部署到 GitHub Pages
+
+### 首次部署
+
+1. 在 GitHub 上创建仓库（例如 `Liu233jh/cyber-relic-scanner`）
+2. 确保 `vite.config.js` 中 `base` 与仓库名一致：`'/cyber-relic-scanner/'`
+3. 确保 `public/assets/model.glb` 存在
+4. 关联远程仓库：
+
+```bash
+git remote set-url origin https://github.com/Liu233jh/cyber-relic-scanner.git
+```
+
+5. 运行部署：
 
 ```bash
 pnpm deploy
-# Runs: vite build → gh-pages -d dist
+# 等价于：vite build → gh-pages -d dist
 ```
 
-Make sure the git remote `origin` points to your GitHub repo and GitHub Pages is enabled for the `gh-pages` branch in repo settings.
+6. 在 GitHub 仓库 **Settings → Pages** 中，确保 Source 选择 `gh-pages` 分支
+
+### 后续更新
+
+每次修改后只需运行：
+
+```bash
+pnpm deploy
+```
 
 ---
 
-## Development Journey
+## 如何替换 3D 模型
 
-### Phase 1 — Foundation (clone → analysis → first run)
-- Cloned `chenglou/pretext` and `feitangyuan/pretext-3d`
-- Analyzed Pretext core: `layout.ts` (915 lines), `line-break.ts` (1267 lines), `measurement.ts` (291 lines)
-- Installed dependencies via pnpm, resolved proxy and port conflicts
-- Got the base template running with Vite dev server
+1. 将你的 `.glb` 文件放到 `public/assets/model.glb`
+2. 代码中已配置从 `./assets/model.glb` 自动加载
+3. `normalizeModel()` 会自动处理 Box3 居中和缩放
+4. 如果画框效果不理想，调整以下函数：
 
-### Phase 2 — Text Black Hole Collapse
-- Added `getMouseBlackHoleInterval()` to `mask-layout.mjs`
-- Integrated mouse black hole into the mask pipeline alongside model silhouette
-- Text now repels from both the 3D model AND the mouse cursor
-- Added mouse velocity tracking for future glitch effects
+| 函数 | 调整项 |
+|------|--------|
+| `normalizeModel()` | 缩放系数 `5.0 / maxDim` |
+| `computeFitState()` | 基于 FOV 的距离计算 |
+| `addCyberWireframe()` | 边缘阈值角 `22`、透明度 `0.25` |
 
-### Phase 3 — Matrix Hacker Theme
-- Replaced all text with hacker/security tokens (`0xDEADBEEF`, `ACCESS_DENIED`, `KERNEL_PANIC`, etc.)
-- Created 13-part procedural voxel bust (hoodie + mask figure)
-- Dual-material rendering: `MeshStandardMaterial` solid + `EdgesGeometry`/`LineBasicMaterial` wireframe
-- Green spotlight from below, dark ambient
-- CSS `@keyframes flicker` with staggered nth-child delays
-
-### Phase 4 — Mysterious Hacker Interaction Space
-- Replaced camera orbiting with model-centric rotation (drag to spin model)
-- Model Y-axis: 360° via horizontal drag; X-axis: ±28° via vertical drag
-- Idle auto-rotation at 0.12 rad/s
-- Velocity-enhanced glitch: `letter-spacing` jitter, `translate` offset, `opacity` fade, dynamic `text-shadow`
-- `mix-blend-mode: screen` on text for authentic CRT look
-- Scanline overlay via `::after` pseudo-element
-
-### Phase 5 — Real GLB Model Integration
-- Downloaded KhronosGroup **DamagedHelmet.glb** (CC BY 4.0) via jsDelivr CDN (raw GitHub was too slow)
-- 3.6MB, sci-fi damaged flight helmet with PBR textures
-- `normalizeModel()`: Box3-based centering, scale to 5.0 units, DoubleSide materials
-- Added `addCyberWireframe()`: cyan edge geometry overlay on all mesh children
-- Procedural voxel bust retained as error fallback
-- Model size reduced: scale target 7.8 → 5.0, fallback model 0.55x scale
-
-### Phase 6 — Cyber Relic: Data Extraction Terminal (current)
-- **Color overhaul**: `#00FF41` green → `#00F0FF` holographic cyan
-- **Background**: `#010301` → `#05050A` (deep navy-black)
-- **Lighting**: Three-point setup — white key light (intensity 120) raking across helmet to expose scratch detail, cyan rim light (intensity 80) for cyber silhouette, subtle fill light to prevent dead black
-- **Text content**: Flight recorder log tokens — `DATA_CORRUPTED`, `SECTOR_7G_OFFLINE`, `0xBADF00D`, `MEMORY_FRAGMENT_LOST`, `EJECT_SYSTEM_FAILED`, `RECOVERING_LOGS...`, etc. (30 unique tokens, 90 paragraphs of 3-9 random tokens each)
-- **Kicker/Title**: `EMERGENCY LOG RECOVERY` / `DERELICT OMEGA-7`
-- **Camera fix**: Camera now dynamically tracks model center via `fitState.target` each frame instead of hardcoded lookAt
-- **Static assets**: `model.glb` moved to `public/assets/` for Vite production build compatibility
-
-### Phase 7 — Deployment
-- Configured `vite.config.js` with `base: '/cyber-relic-scanner/'`
-- Installed `gh-pages` for automated deployment
-- Added `predeploy` and `deploy` scripts to `package.json`
-- Pushed to `gh-pages` branch on `Liu233jh/cyber-relic-scanner`
-- Live at `https://liu233jh.github.io/cyber-relic-scanner/`
+如果 GLB 加载失败，`createProceduralModel()` 中的程序化体素后备模型会自动启用。
 
 ---
 
-## Configuration Reference
+## 配置参数速查
 
-### Key Constants in `main.mjs`
+### `main.mjs` 关键常量
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `BODY_FONT_SIZE` | 13px | Base text size |
-| `BODY_LINE_HEIGHT` | 16px | Text line height (band scan granularity) |
-| `MIN_SLOT_WIDTH` | 80px | Minimum horizontal slot for text placement |
-| `MASK_SIZE` | 1024×576 | Offscreen mask render resolution |
-| `MASK_PADDING` | 10px | Padding added around mask intervals |
-| `GLITCH_RADIUS` | 300px | Distance from cursor for glitch activation |
-| `GLITCH_VELOCITY_SCALE` | 0.012 | Mouse velocity influence on glitch intensity |
+| 常量 | 值 | 说明 |
+|------|------|------|
+| `BODY_FONT_SIZE` | 13px | 正文文字大小 |
+| `BODY_LINE_HEIGHT` | 16px | 文字行高（行带扫描粒度） |
+| `MIN_SLOT_WIDTH` | 80px | 文字放置的最小水平槽位宽度 |
+| `MASK_SIZE` | 1024×576 | 离屏遮罩渲染分辨率 |
+| `MASK_PADDING` | 10px | 遮罩区间额外内边距 |
+| `GLITCH_RADIUS` | 300px | 故障效果激活距离（距光标） |
+| `GLITCH_VELOCITY_SCALE` | 0.012 | 鼠标速度对故障强度的影响系数 |
 
-### Lighting Setup
+### 三点布光参数
 
-| Light | Type | Color | Intensity | Position |
-|-------|------|-------|-----------|----------|
-| Ambient | `AmbientLight` | `#0a1a2a` | 0.45 | — |
-| Key (scratch detail) | `SpotLight` | `#ffffff` | 120 | (5, 1.5, 6) |
-| Rim (cyber silhouette) | `SpotLight` | `#00F0FF` | 80 | (-4, 2.5, -3) |
-| Fill (prevent dead black) | `PointLight` | `#003344` | 3 | (0, -2, 4) |
+| 灯光 | 类型 | 颜色 | 强度 | 位置 |
+|------|------|------|------|------|
+| 环境光 | `AmbientLight` | `#0a1a2a` | 0.45 | — |
+| 主光（划痕细节） | `SpotLight` | `#ffffff` | 120 | (5, 1.5, 6) |
+| 轮廓光（赛博勾边） | `SpotLight` | `#00F0FF` | 80 | (-4, 2.5, -3) |
+| 补光（防死黑） | `PointLight` | `#003344` | 3 | (0, -2, 4) |
 
-### Model Normalization
+### 模型归一化流程
 
-- Bounding box computed via `THREE.Box3().setFromObject()`
-- Scale factor: `5.0 / maxDimension` (uniform scale to fit in ~5 world units)
-- Origin centering: `root.position -= scaledCenter`
-- All materials forced to `THREE.DoubleSide`
-- Wireframe overlay: `EdgesGeometry` with threshold angle 22°, cyan `0x00F0FF` at opacity 0.25
-
----
-
-## How To Swap The Model
-
-1. Place your `.glb` file at `public/assets/model.glb`
-2. The existing code auto-loads from `./assets/model.glb`
-3. `normalizeModel()` handles Box3 centering and scaling
-4. Tune these functions if the framing looks off:
-   - `normalizeModel()` — scale factor (`5.0 / maxDim`)
-   - `computeFitState()` — FOV-based distance calculation
-   - `addCyberWireframe()` — edge threshold (22) and opacity (0.25)
-
-The procedural voxel fallback in `createProceduralModel()` runs automatically if the GLB fails to load.
+1. `Box3().setFromObject(root)` — 计算世界空间包围盒
+2. `scale = 5.0 / maxDimension` — 统一缩放到约 5 个世界单位
+3. `root.position -= scaledCenter` — 平移使模型居中于原点
+4. 所有材质强制 `THREE.DoubleSide`
+5. `EdgesGeometry(geo, 22)` — 在几何体锐边上叠加青色线框（透明度 0.25）
 
 ---
 
-## License & Credits
+## 许可证与致谢
 
-- **DamagedHelmet model**: KhronosGroup glTF Sample Assets, CC BY 4.0
-- **Pretext**: [@chenglou/pretext](https://github.com/chenglou/pretext)
-- **Original pretext-3d template**: [feitangyuan/pretext-3d](https://github.com/feitangyuan/pretext-3d)
-- **Three.js**: MIT License
-- **This project**: Built from scratch as described in the Development Journey above
+- **DamagedHelmet 模型**：KhronosGroup glTF Sample Assets，CC BY 4.0
+- **Pretext 排版引擎**：[@chenglou/pretext](https://github.com/chenglou/pretext)
+- **原始 pretext-3d 模板**：[feitangyuan/pretext-3d](https://github.com/feitangyuan/pretext-3d)
+- **Three.js**：MIT License
+- **本项目**：如上述构建历程所述，从零迭代开发
