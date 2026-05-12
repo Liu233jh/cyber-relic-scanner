@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { layoutNextLine, prepareWithSegments } from '/pretext.js'
 import {
   carveTextLineSlots,
@@ -212,6 +213,9 @@ async function loadModel() {
     statusChip.textContent = 'RECOVERING FLIGHT DATA…'
 
     const loader = new GLTFLoader()
+    const dracoLoader = new DRACOLoader()
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/')
+    loader.setDRACOLoader(dracoLoader)
     const gltf = await loader.loadAsync('./assets/model.glb')
     modelRoot = gltf.scene
     normalizeModel(modelRoot)
