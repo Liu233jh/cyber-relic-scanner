@@ -124,3 +124,17 @@ export function chooseSlot(slots, side) {
   }
   return chosen
 }
+
+const MOUSE_BLACK_HOLE_RADIUS = 200
+
+export function getMouseBlackHoleInterval(mouseX, mouseY, bandTop, bandBottom) {
+  if (mouseX == null || mouseY == null) return null
+  const bandCenter = (bandTop + bandBottom) / 2
+  const dy = Math.abs(bandCenter - mouseY)
+  if (dy >= MOUSE_BLACK_HOLE_RADIUS) return null
+  const halfWidth = Math.sqrt(MOUSE_BLACK_HOLE_RADIUS * MOUSE_BLACK_HOLE_RADIUS - dy * dy)
+  return {
+    left: mouseX - halfWidth,
+    right: mouseX + halfWidth,
+  }
+}

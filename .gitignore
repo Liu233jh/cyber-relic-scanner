@@ -3,3 +3,5 @@ dist/
 node_modules/
 assets/*.glb
 !assets/.gitkeep
+public/assets/*.glb
+!public/assets/.gitkeep

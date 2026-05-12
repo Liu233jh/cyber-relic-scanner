@@ -5,111 +5,66 @@ import {
   carveTextLineSlots,
   chooseSlot,
   clamp,
-  getLayoutCacheKey,
   getMaskIntervalForBand,
-  getScrubPose,
+  getMouseBlackHoleInterval,
   mergeIntervals,
-  shouldJustifyLine,
   splitParagraphs,
 } from './mask-layout.mjs'
 
-const BODY_FONT_FAMILY = '"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,serif'
-const BODY_FONT_SIZE = 14
+const MONO_FONT = '"Courier New","JetBrains Mono","Fira Code","Consolas",monospace'
+const BODY_FONT_FAMILY = MONO_FONT
+const BODY_FONT_SIZE = 13
 const BODY_FONT = `${BODY_FONT_SIZE}px ${BODY_FONT_FAMILY}`
-const BODY_LINE_HEIGHT = 22
-const KICKER_FONT_SIZE = 8
-const KICKER_LINE_HEIGHT = 12
-const TITLE_FONT_SIZE_LARGE = 44
-const TITLE_FONT_SIZE_SMALL = 15
-const TITLE_LINE_HEIGHT_LARGE = 36
-const TITLE_LINE_HEIGHT_SMALL = 18
-const MIN_SLOT_WIDTH = 160
-const SCRUB_RANGES = {
-  yawRange: [-0.6, 0.4],
-  pitchRange: [0.02, 0.1],
-  distanceRange: [1.3, 0.4],
-  panRange: [-0.6, 0.6],
-}
+const BODY_LINE_HEIGHT = 16
+const KICKER_FONT_SIZE = 9
+const KICKER_LINE_HEIGHT = 13
+const TITLE_FONT_SIZE = 20
+const TITLE_LINE_HEIGHT = 22
+const MIN_SLOT_WIDTH = 80
 const MASK_SIZE = { width: 1024, height: 576 }
-const IDLE_SWAY = 0.032
-const IDLE_SPEED = 0.00014
-const POINTER_EASE = 5.2
-const MASK_PADDING = 20
-const MIN_JUSTIFY_WIDTH = 180
-const FRAME_Y_OFFSET = -0.32
+const MASK_PADDING = 10
+const MIN_JUSTIFY_WIDTH = 9999
+
+const GLITCH_RADIUS = 300
+const GLITCH_VELOCITY_SCALE = 0.012
 const copyLayer = requireElement('copy-layer')
 const sceneLayer = requireElement('scene-layer')
 const scrubFill = requireElement('scrub-fill')
 const statusChip = requireElement('status-chip')
 
+function generateFlightLogText() {
+  const tokens = [
+    'DATA_CORRUPTED', 'SECTOR_7G_OFFLINE', '0xBADF00D', 'MEMORY_FRAGMENT_LOST',
+    'EJECT_SYSTEM_FAILED', 'RECOVERING_LOGS...', 'NAVIGATION_OFFLINE', '0xDEADBEEF',
+    'LIFE_SUPPORT_CRITICAL', 'SOS_BEACON_ACTIVE', 'FUEL_CELL_DEPLETED', '0xCAFEBABE',
+    'HULL_BREACH_DETECTED', 'EMERGENCY_PROTOCOL_7', 'OXYGEN_RESERVE_LOW', '0x8BADF00D',
+    'COMMS_ARRAY_DAMAGED', 'ESCAPE_POD_JETTISONED', 'BLACK_BOX_RECORDING', '0xFEEDFACE',
+    'REACTOR_CORE_UNSTABLE', 'STASIS_POD_MALFUNCTION', 'ASTROMETRICS_OFFLINE', '0xBADC0DE',
+    'SALVAGE_CLAIM_ACTIVE', 'DERELICT_CLASS_OMEGA', 'ORBITAL_DECAY_IMMINENT', '0x00F0FF',
+    'CRYOSLEEP_INTERRUPTED', 'UNKNOWN_SIGNAL_DETECTED', 'CARGO_BAY_DECOMPRESSED',
+  ]
+  const paragraphs = []
+  for (let i = 0; i < 90; i++) {
+    let para = []
+    const count = Math.floor(Math.random() * 7) + 3
+    for (let w = 0; w < count; w++) {
+      para.push(tokens[Math.floor(Math.random() * tokens.length)])
+    }
+    paragraphs.push(para.join(' '))
+  }
+  return paragraphs.join('\n')
+}
+
 const BLOCKS = [
   {
-    id: 'block-left',
-    kicker: 'Template / Overview',
-    title: `PRETEXT
-3D`,
+    id: 'block-full',
+    kicker: 'EMERGENCY LOG RECOVERY',
+    title: `DERELICT
+OMEGA-7`,
     bodyAlign: 'left',
     titleAlign: 'left',
-    headerOffset: 22,
-    text: `
-This template turns a single 3D model into an editorial layout that stays readable while the object moves through the page. The model is rendered in Three.js, converted into a high-contrast silhouette, and used as a live obstacle for text composition.
-
-Instead of dropping copy on top of a fixed image, the page measures the visible occupied shape and recalculates legal line slots from that shape. The result feels closer to typesetting around a physical object than around a rectangle.
-
-The default motion stays narrow on purpose. A small horizontal scrub is enough to change the silhouette, expose different negative spaces, and make the copy breathe without turning the page into a scene viewer.
-
-What matters most is not subject matter. Any model with a strong outline, readable mass, and limited visual noise can be used here as long as the page still produces stable text corridors.
-
-The engine is generic. Swap the asset, retune scale and framing, and the same layout system can support architecture, products, sculptures, ruins, or any other object that reads well in silhouette.
-
-This repository is meant to be a clean starting point, not a gallery of finished scenes.
-`.trim(),
-  },
-  {
-    id: 'block-center',
-    kicker: 'How It Works',
-    title: `MASK
-REFLOW`,
-    bodyAlign: 'left',
-    titleAlign: 'left',
-    headerOffset: 22,
-    text: `
-The pipeline is simple. Render the model. Draw a black and white mask. Scan each horizontal band for blocked pixels. Convert the remaining intervals into candidate text slots. Ask Pretext for the next valid line inside each slot.
-
-Because the mask is regenerated from the live camera view, layout responds to motion instead of using hardcoded exclusion boxes. Thin gaps, large masses, and shifting voids all change how the text settles.
-
-That keeps the implementation small but expressive. Most adjustments happen in a handful of parameters: model normalization, framing distance, scrub ranges, mask padding, and minimum slot width.
-
-The core rule is to preserve readability first. Motion is there to reshape the page, not to compete with it.
-`.trim(),
-  },
-  {
-    id: 'block-right',
-    kicker: 'Model Notes',
-    title: `SWAP
-THE MODEL`,
-    bodyAlign: 'left',
-    titleAlign: 'left',
-    headerOffset: 22,
-    text: `
-Use assets/model.glb as the working asset path. The repository keeps that location stable so model replacement does not require code changes unless you want a different filename.
-
-Good inputs usually have one dominant subject, a clear silhouette, and enough mass to carve meaningful negative space. Extremely thin or fragmented models tend to produce noisy slot geometry and weaker typography.
-
-Most model-specific tuning belongs in normalizeModel(), SCRUB_RANGES, and computeFitState(). Layout parameters only come after the object is already framed correctly.
-`.trim(),
-  },
-  {
-    id: 'block-note',
-    kicker: 'Layout Rule',
-    title: `READABLE
-MOTION`,
-    bodyAlign: 'left',
-    titleAlign: 'left',
-    headerOffset: 22,
-    text: `
-The silhouette should interrupt the page cleanly before it starts describing itself in detail. When the outline is strong, the text yields and returns in a way that feels intentional rather than decorative.
-`.trim(),
+    headerOffset: 14,
+    text: generateFlightLogText(),
   },
 ]
 
@@ -118,35 +73,30 @@ const preparedBlocks = BLOCKS.map(block => {
   const leadLines = [
     {
       text: block.kicker.toUpperCase(),
-      prepared: prepareWithSegments(block.kicker.toUpperCase(), `${KICKER_FONT_SIZE}px "Helvetica Neue", Helvetica, Arial, sans-serif`),
-      fontFamily: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+      prepared: prepareWithSegments(block.kicker.toUpperCase(), `${KICKER_FONT_SIZE}px ${MONO_FONT}`),
+      fontFamily: MONO_FONT,
       fontSize: `${KICKER_FONT_SIZE}px`,
       lineHeight: `${KICKER_LINE_HEIGHT}px`,
-      letterSpacing: '0.28em',
-      fontWeight: '400',
+      letterSpacing: '0.22em',
+      fontWeight: '700',
       textTransform: 'uppercase',
       slotHeight: KICKER_LINE_HEIGHT,
-      advanceAfter: 8,
+      advanceAfter: 6,
       align: 'left',
     },
-    ...titleLines.map((text, index) => {
-      const isLead = block.id === 'block-left'
-      const fontSize = isLead ? TITLE_FONT_SIZE_LARGE : TITLE_FONT_SIZE_SMALL
-      const align = block.titleAlign
-      return {
-        text,
-        prepared: prepareWithSegments(text, `${fontSize}px ${BODY_FONT_FAMILY}`),
-        fontFamily: BODY_FONT_FAMILY,
-        fontSize: `${fontSize}px`,
-        lineHeight: `${isLead ? TITLE_LINE_HEIGHT_LARGE : TITLE_LINE_HEIGHT_SMALL}px`,
-        letterSpacing: isLead ? '0.08em' : '0.18em',
-        fontWeight: '700',
-        textTransform: 'uppercase',
-        slotHeight: isLead ? TITLE_LINE_HEIGHT_LARGE : TITLE_LINE_HEIGHT_SMALL,
-        advanceAfter: index === 0 ? 0 : 4,
-        align,
-      }
-    }),
+    ...titleLines.map((text, index) => ({
+      text,
+      prepared: prepareWithSegments(text, `${TITLE_FONT_SIZE}px ${MONO_FONT}`),
+      fontFamily: MONO_FONT,
+      fontSize: `${TITLE_FONT_SIZE}px`,
+      lineHeight: `${TITLE_LINE_HEIGHT}px`,
+      letterSpacing: '0.12em',
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      slotHeight: TITLE_LINE_HEIGHT,
+      advanceAfter: index === 0 ? 0 : 3,
+      align: block.titleAlign,
+    })),
   ]
 
   return {
@@ -178,6 +128,16 @@ const pointer = {
   startX: 0,
   startProgress: 0.5,
 }
+let mouseX = null
+let mouseY = null
+let lastMouseX = null
+let lastMouseY = null
+let mouseVelocity = 0
+
+let modelRotationY = 0
+let modelRotationX = 0.15
+let startRotationX = 0.15
+let startRotationY = 0
 
 let modelRoot = null
 let maskRoot = null
@@ -212,42 +172,120 @@ function initScene() {
   maskCanvas.width = MASK_SIZE.width
   maskCanvas.height = MASK_SIZE.height
 
-  scene.background = new THREE.Color(0x000000)
+  scene.background = new THREE.Color(0x05050A)
   maskScene.background = new THREE.Color(0x000000)
   maskScene.overrideMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff })
 
-  const hemi = new THREE.HemisphereLight(0xf3e9d3, 0x120f0a, 1.9)
-  const key = new THREE.DirectionalLight(0xfff6de, 2.8)
-  key.position.set(8, 10, 12)
-  const rim = new THREE.DirectionalLight(0x8c6d42, 1.15)
-  rim.position.set(-10, 4, -8)
-  scene.add(hemi, key, rim)
+  const ambient = new THREE.AmbientLight(0x0a1a2a, 0.45)
+  scene.add(ambient)
 
-  camera.position.set(0, 1.3, 10)
-  camera.lookAt(0, 1.2, 0)
+  const keyLight = new THREE.SpotLight(0xffffff, 120)
+  keyLight.position.set(5, 1.5, 6)
+  keyLight.angle = 0.45
+  keyLight.penumbra = 0.35
+  keyLight.decay = 1.0
+  keyLight.distance = 22
+  keyLight.target.position.set(0, 1.0, 0)
+  scene.add(keyLight)
+  scene.add(keyLight.target)
+
+  const rimLight = new THREE.SpotLight(0x00F0FF, 80)
+  rimLight.position.set(-4, 2.5, -3)
+  rimLight.angle = 0.5
+  rimLight.penumbra = 0.7
+  rimLight.decay = 1.1
+  rimLight.distance = 18
+  rimLight.target.position.set(0, 1.8, 0)
+  scene.add(rimLight)
+  scene.add(rimLight.target)
+
+  const fillLight = new THREE.PointLight(0x003344, 3)
+  fillLight.position.set(0, -2, 4)
+  scene.add(fillLight)
+
+  camera.position.set(0, 0, 13)
   handleResize()
 }
 
 async function loadModel() {
   try {
-    statusChip.textContent = 'Loading model…'
+    statusChip.textContent = 'RECOVERING FLIGHT DATA…'
 
     const loader = new GLTFLoader()
     const gltf = await loader.loadAsync('./assets/model.glb')
     modelRoot = gltf.scene
     normalizeModel(modelRoot)
+    addCyberWireframe(modelRoot)
     scene.add(modelRoot)
 
     maskRoot = modelRoot.clone(true)
     maskScene.add(maskRoot)
 
     fitState = computeFitState(modelRoot, camera, viewportWidth, viewportHeight)
-    statusChip.textContent = 'Drag horizontally'
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown model load error.'
-    statusChip.textContent = 'Model load failed'
-    console.error(message)
+    statusChip.textContent = 'DRAG TO ROTATE'
+  } catch (_error) {
+    statusChip.textContent = 'SIGNAL LOST — STANDBY'
+    modelRoot = createProceduralModel(scene)
+    maskRoot = createProceduralModel(maskScene)
+    fitState = computeFitState(modelRoot, camera, viewportWidth, viewportHeight)
   }
+}
+
+function createProceduralModel(targetScene) {
+  const group = new THREE.Group()
+  const solidMat = new THREE.MeshStandardMaterial({
+    color: 0x0a1018,
+    roughness: 0.55,
+    metalness: 0.25,
+  })
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x00F0FF, transparent: true, opacity: 0.45 })
+
+  function addPart(w, h, d, x, y, z, segW = 3, segH = 3, segD = 2) {
+    const geo = new THREE.BoxGeometry(w, h, d, segW, segH, segD)
+    const solid = new THREE.Mesh(geo, solidMat)
+    solid.position.set(x, y, z)
+    group.add(solid)
+
+    const edges = new THREE.EdgesGeometry(geo)
+    const lines = new THREE.LineSegments(edges, lineMat)
+    lines.position.copy(solid.position)
+    group.add(lines)
+  }
+
+  // Hood (oversized, extends around head)
+  addPart(3.4, 2.0, 2.6, 0, 5.8, 0, 5, 3, 3)
+  addPart(3.0, 2.6, 2.4, 0, 5.0, 0, 5, 4, 3)
+
+  // Head inside hood
+  addPart(2.2, 2.4, 1.8, 0, 4.0, 0.2, 4, 4, 3)
+
+  // Mask (thin bar across face)
+  addPart(2.0, 0.9, 0.15, 0, 4.2, 1.2, 3, 2, 1)
+
+  // Neck
+  addPart(1.2, 1.0, 1.2, 0, 2.8, 0, 2, 2, 2)
+
+  // Shoulders (wide hoodie shape)
+  addPart(7.0, 0.7, 3.0, 0, 2.3, 0, 6, 2, 3)
+  addPart(6.4, 0.6, 2.8, 0, 1.8, 0, 5, 2, 3)
+
+  // Upper torso
+  addPart(5.0, 2.0, 2.2, 0, 0.8, 0, 5, 3, 3)
+
+  // Mid torso
+  addPart(4.2, 1.8, 2.0, 0, -0.6, 0, 4, 3, 3)
+
+  // Lower torso / waist
+  addPart(3.4, 1.5, 1.8, 0, -1.8, 0, 3, 3, 3)
+
+  // Hood side flaps
+  addPart(0.6, 2.8, 1.4, -1.7, 4.8, -0.2, 1, 4, 2)
+  addPart(0.6, 2.8, 1.4, 1.7, 4.8, -0.2, 1, 4, 2)
+
+  group.scale.setScalar(0.55)
+  group.position.set(0, 0.35, 0)
+  targetScene.add(group)
+  return group
 }
 
 function normalizeModel(root) {
@@ -256,7 +294,7 @@ function normalizeModel(root) {
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
   const maxDim = Math.max(size.x, size.y, size.z, 0.001)
-  const scale = 7.8 / maxDim
+  const scale = 5.0 / maxDim
   root.scale.setScalar(scale)
   root.updateWorldMatrix(true, true)
 
@@ -264,7 +302,6 @@ function normalizeModel(root) {
   const scaledSize = scaledBox.getSize(new THREE.Vector3())
   const scaledCenter = scaledBox.getCenter(new THREE.Vector3())
   root.position.sub(scaledCenter)
-  root.position.y -= scaledSize.y * 0.52
 
   root.traverse(child => {
     if (!(child instanceof THREE.Mesh)) return
@@ -274,6 +311,29 @@ function normalizeModel(root) {
     for (const material of materials) {
       if (!material) continue
       material.side = THREE.DoubleSide
+    }
+  })
+}
+
+function addCyberWireframe(root) {
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0x00F0FF,
+    transparent: true,
+    opacity: 0.25,
+    depthTest: true,
+    depthWrite: false,
+  })
+
+  root.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return
+    const geo = child.geometry
+    if (!geo || !geo.index && !geo.attributes.position) return
+    try {
+      const edges = new THREE.EdgesGeometry(geo, 22)
+      const lines = new THREE.LineSegments(edges, lineMat)
+      child.add(lines)
+    } catch (_) {
+      // skip degenerate geometry
     }
   })
 }
@@ -288,7 +348,7 @@ function computeFitState(root, activeCamera, width, height) {
   const baseDistance = Math.max(fitHeightDistance, fitWidthDistance, 5.8)
 
   return {
-    target: center.clone().setY(center.y + size.y * 0.08 + FRAME_Y_OFFSET),
+    target: center.clone(),
     baseDistance,
   }
 }
@@ -301,19 +361,45 @@ function handleResize() {
   maskCamera.copy(camera)
   visibleRenderer.setSize(viewportWidth, viewportHeight)
   fitState = modelRoot === null ? fitState : computeFitState(modelRoot, camera, viewportWidth, viewportHeight)
+  if (fitState && modelRoot) {
+    camera.position.set(
+      fitState.target.x,
+      fitState.target.y,
+      fitState.target.z + fitState.baseDistance,
+    )
+    camera.lookAt(fitState.target)
+    maskCamera.copy(camera)
+  }
   lastLayoutKey = ''
 }
 
 function handlePointerDown(event) {
   pointer.dragging = true
   pointer.startX = event.clientX
+  pointer.startY = event.clientY
   pointer.startProgress = pointer.target
+  startRotationX = modelRotationX
+  startRotationY = modelRotationY
 }
 
 function handlePointerMove(event) {
-  if (!pointer.dragging) return
-  const dx = (event.clientX - pointer.startX) / viewportWidth
-  pointer.target = clamp(pointer.startProgress + dx, 0, 1)
+  if (lastMouseX != null) {
+    const dx = event.clientX - lastMouseX
+    const dy = event.clientY - lastMouseY
+    mouseVelocity = Math.sqrt(dx * dx + dy * dy)
+  }
+  lastMouseX = event.clientX
+  lastMouseY = event.clientY
+  mouseX = event.clientX
+  mouseY = event.clientY
+
+  if (pointer.dragging) {
+    const dx = (event.clientX - pointer.startX) / viewportWidth
+    pointer.target = clamp(pointer.startProgress + dx, 0, 1)
+    modelRotationY = pointer.target * Math.PI * 2
+    const dy = (event.clientY - pointer.startY) / viewportHeight
+    modelRotationX = clamp(startRotationX + dy * Math.PI * 0.5, -0.5, 0.5)
+  }
 }
 
 function handlePointerUp() {
@@ -325,34 +411,38 @@ function tick() {
   if (modelRoot === null || maskRoot === null || fitState === null) return
 
   const dt = clock.getDelta()
-  const idleTarget = 0.5 + Math.sin(performance.now() * 0.0002) * 0.05
-  pointer.target = pointer.dragging ? pointer.target : idleTarget
-  pointer.progress += (pointer.target - pointer.progress) * clamp(dt * 5.0, 0.02, 0.1)
+
+  if (!pointer.dragging) {
+    const idleSpeed = 0.12
+    modelRotationY += dt * idleSpeed
+    pointer.target = (modelRotationY % (Math.PI * 2)) / (Math.PI * 2)
+    pointer.progress = pointer.target
+  } else {
+    pointer.progress += (pointer.target - pointer.progress) * clamp(dt * 8.0, 0.04, 0.15)
+    modelRotationY = pointer.progress * Math.PI * 2
+  }
+
+  // Decay mouse velocity
+  mouseVelocity *= Math.max(0, 1 - dt * 12)
+
+  modelRoot.rotation.y = modelRotationY
+  modelRoot.rotation.x = modelRotationX
+  maskRoot.rotation.copy(modelRoot.rotation)
+
   scrubFill.style.width = '100%'
   scrubFill.style.transform = `scaleX(${clamp(pointer.progress, 0, 1)})`
 
-  updatePose(pointer.progress)
+  camera.position.set(
+    fitState.target.x,
+    fitState.target.y,
+    fitState.target.z + fitState.baseDistance,
+  )
+  camera.lookAt(fitState.target)
+  maskCamera.copy(camera)
+
   renderScene()
   layoutCopy(renderMask())
-}
-
-function updatePose(progress) {
-  const pose = getScrubPose(progress, SCRUB_RANGES)
-  const target = fitState.target.clone()
-  target.x += pose.panX
-
-  const distance = fitState.baseDistance * pose.distance
-  const cosPitch = Math.cos(pose.pitch)
-  const position = new THREE.Vector3(
-    Math.sin(pose.yaw) * distance * cosPitch,
-    Math.sin(pose.pitch) * distance + target.y,
-    Math.cos(pose.yaw) * distance * cosPitch,
-  )
-
-  camera.position.copy(position)
-  camera.lookAt(target)
-  maskCamera.position.copy(camera.position)
-  maskCamera.quaternion.copy(camera.quaternion)
+  applyGlitch()
 }
 
 function renderScene() {
@@ -370,7 +460,7 @@ function renderMask() {
 
 function layoutCopy(mask) {
   const regions = getRegions(viewportWidth, viewportHeight)
-  const layoutKey = getLayoutCacheKey(viewportWidth, viewportHeight, pointer.progress)
+  const layoutKey = `${viewportWidth}:${viewportHeight}:${modelRotationY.toFixed(4)}:${modelRotationX.toFixed(4)}:${mouseX ?? 0}:${mouseY ?? 0}`
   if (layoutKey === lastLayoutKey) return
   lastLayoutKey = layoutKey
 
@@ -422,7 +512,7 @@ function layoutBlock(block, region, mask) {
     y = placed.nextY
   }
 
-  y += 16
+  y += 6
 
   for (const preparedParagraph of block.preparedParagraphs) {
     let cursor = { segmentIndex: 0, graphemeIndex: 0 }
@@ -430,16 +520,22 @@ function layoutBlock(block, region, mask) {
     while (y + BODY_LINE_HEIGHT <= region.y + region.height) {
       const interval = getMaskIntervalForBand(
         mask,
-        y - 4,
-        y + BODY_LINE_HEIGHT + 2,
+        y - 2,
+        y + BODY_LINE_HEIGHT + 1,
         viewportWidth,
         viewportHeight,
         { threshold: 26, padding: MASK_PADDING, minPixels: 1 },
       )
 
-      const merged = interval === null
+      const allIntervals = []
+      if (interval !== null) allIntervals.push(interval)
+
+      const mouseHole = getMouseBlackHoleInterval(mouseX, mouseY, y, y + BODY_LINE_HEIGHT)
+      if (mouseHole !== null) allIntervals.push(mouseHole)
+
+      const merged = allIntervals.length === 0
         ? []
-        : mergeIntervals([interval], region.x, region.x + region.width)
+        : mergeIntervals(allIntervals, region.x, region.x + region.width)
 
       const slots = carveTextLineSlots(
         { left: region.x, right: region.x + region.width },
@@ -458,29 +554,18 @@ function layoutBlock(block, region, mask) {
 
       if (line === null) break
 
-      const wordCount = line.text.trim().split(/\s+/).length
-      const isNarrowSlot = slotWidth < MIN_JUSTIFY_WIDTH || wordCount < 4
-      const justify = !isNarrowSlot && shouldJustifyLine(line.text, slotWidth, MIN_JUSTIFY_WIDTH)
-      const align = justify ? 'justify' : block.bodyAlign
-
-      let wordSpacing = '0px'
-      if (justify && wordCount > 1) {
-        const rawSpace = Math.max(0, (slotWidth - line.width) / (wordCount - 1))
-        wordSpacing = `${Math.floor(rawSpace * 10) / 10}px`
-      }
-
       lines.push({
         x: Math.round(slot.left),
         y: Math.round(y),
         text: line.text,
         width: line.width,
         slotWidth: Math.floor(slotWidth),
-        align,
-        wordSpacing,
-        fontFamily: BODY_FONT_FAMILY,
+        align: 'left',
+        wordSpacing: '0px',
+        fontFamily: MONO_FONT,
         fontSize: `${BODY_FONT_SIZE}px`,
         lineHeight: `${BODY_LINE_HEIGHT}px`,
-        letterSpacing: '0.006em',
+        letterSpacing: '0.02em',
         fontWeight: '400',
         textTransform: 'none',
       })
@@ -489,7 +574,7 @@ function layoutBlock(block, region, mask) {
       y += BODY_LINE_HEIGHT
     }
 
-    y += BODY_LINE_HEIGHT * 0.8
+    y += BODY_LINE_HEIGHT * 0.3
   }
 
   return lines
@@ -502,16 +587,22 @@ function placeFlowLine(lineSpec, region, mask, y, fallbackLineHeight, options = 
   while (currentY + lineHeight <= region.y + region.height) {
     const interval = getMaskIntervalForBand(
       mask,
-      currentY - 4,
-      currentY + lineHeight + 2,
+      currentY - 2,
+      currentY + lineHeight + 1,
       viewportWidth,
       viewportHeight,
       { threshold: 26, padding: MASK_PADDING, minPixels: 1 },
     )
 
-    const merged = interval === null
+    const allIntervals = []
+    if (interval !== null) allIntervals.push(interval)
+
+    const mouseHole = getMouseBlackHoleInterval(mouseX, mouseY, currentY, currentY + lineHeight)
+    if (mouseHole !== null) allIntervals.push(mouseHole)
+
+    const merged = allIntervals.length === 0
       ? []
-      : mergeIntervals([interval], region.x, region.x + region.width)
+      : mergeIntervals(allIntervals, region.x, region.x + region.width)
 
     const slots = carveTextLineSlots(
       { left: region.x, right: region.x + region.width },
@@ -556,25 +647,47 @@ function placeFlowLine(lineSpec, region, mask, y, fallbackLineHeight, options = 
 }
 
 function getRegions(width, height) {
-  if (width < 980) {
-    const fullWidth = width - 44
-    return [
-      { id: 'block-left', x: 22, y: 24, width: fullWidth, height: 210 },
-      { id: 'block-center', x: 22, y: 152, width: fullWidth, height: 224 },
-      { id: 'block-right', x: 22, y: 280, width: fullWidth, height: 172 },
-      { id: 'block-note', x: 22, y: 460, width: fullWidth, height: 132 },
-    ]
-  }
-
-  const rightColWidth = Math.min(width * 0.27, 360)
-  const rightColX = width - rightColWidth - 38
-
+  const pad = 28
   return [
-    { id: 'block-left', x: 32, y: 30, width: Math.min(width * 0.3, 430), height: height * 0.7 },
-    { id: 'block-center', x: width * 0.356, y: 30, width: Math.min(width * 0.29, 400), height: height * 0.7 },
-    { id: 'block-right', x: rightColX, y: 30, width: rightColWidth, height: height * 0.4 },
-    { id: 'block-note', x: rightColX, y: Math.max(380, height * 0.5), width: rightColWidth, height: height * 0.4 },
+    { id: 'block-full', x: pad, y: 20, width: width - pad * 2, height: height - 60 },
   ]
+}
+
+function applyGlitch() {
+  if (mouseX == null || mouseY == null) return
+  const veloBoost = Math.min(mouseVelocity * GLITCH_VELOCITY_SCALE, 0.6)
+  for (const node of linePool) {
+    const left = parseFloat(node.style.left) || 0
+    const top = parseFloat(node.style.top) || 0
+    const width = parseFloat(node.style.width) || 0
+    const cx = left + width / 2
+    const cy = top + BODY_LINE_HEIGHT / 2
+    const dist = Math.sqrt((cx - mouseX) ** 2 + (cy - mouseY) ** 2)
+    if (dist < GLITCH_RADIUS) {
+      const proximity = 1 - dist / GLITCH_RADIUS
+      const intensity = proximity + veloBoost * (1 - proximity * 0.4)
+      const clampedIntensity = Math.min(intensity, 1)
+      const jitter = (Math.random() - 0.5) * 0.6 * clampedIntensity * clampedIntensity
+      node.style.letterSpacing = `${(0.02 + jitter).toFixed(4)}em`
+      const sx = (Math.random() - 0.5) * 5 * clampedIntensity
+      const sy = (Math.random() - 0.5) * 3 * clampedIntensity
+      node.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`
+      node.style.opacity = `${1 - clampedIntensity * 0.45}`
+      node.style.textShadow = `0 0 ${2 + clampedIntensity * 8}px #00F0FF, 0 0 ${1 + clampedIntensity * 4}px rgba(0,240,255,0.6)`
+    } else if (veloBoost > 0.05) {
+      const ripple = veloBoost * 0.4
+      const jitter = (Math.random() - 0.5) * 0.2 * ripple
+      node.style.letterSpacing = `${(0.02 + jitter).toFixed(4)}em`
+      node.style.transform = ''
+      node.style.opacity = '1'
+      node.style.textShadow = ''
+    } else {
+      node.style.letterSpacing = '0.02em'
+      node.style.transform = ''
+      node.style.opacity = '1'
+      node.style.textShadow = ''
+    }
+  }
 }
 
 function syncLinePool(count) {
